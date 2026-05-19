@@ -31,12 +31,12 @@ router.post('/generate', validate([
 });
 
 // List all exercises with search, filter, pagination
-router.get('/', (req, res, next) => {
+router.get('/', async (req, res, next) => {
   try {
     const { search, subject, question_type, difficulty, status, page, limit } =
       req.query as Record<string, string>;
 
-    const result = repo.listExercises({
+    const result = await repo.listExercises({
       search,
       subject,
       question_type,
@@ -53,9 +53,9 @@ router.get('/', (req, res, next) => {
 });
 
 // Get single exercise with questions
-router.get('/:id', (req, res, next) => {
+router.get('/:id', async (req, res, next) => {
   try {
-    const exercise = repo.getExerciseWithDetails(req.params.id);
+    const exercise = await repo.getExerciseWithDetails(req.params.id);
     if (!exercise) throw new AppError(404, 'Exercise not found');
     res.json(exercise);
   } catch (err) {
@@ -64,10 +64,10 @@ router.get('/:id', (req, res, next) => {
 });
 
 // Create exercise (with questions)
-router.post('/', (req, res, next) => {
+router.post('/', async (req, res, next) => {
   try {
     const { subject, question_count, question_type, difficulty, instructions, questions } = req.body;
-    const exercise = repo.createExercise({ subject, question_count, question_type, difficulty, instructions, questions });
+    const exercise = await repo.createExercise({ subject, question_count, question_type, difficulty, instructions, questions });
     res.status(201).json(exercise);
   } catch (err) {
     next(err);
@@ -75,10 +75,10 @@ router.post('/', (req, res, next) => {
 });
 
 // Update exercise
-router.put('/:id', (req, res, next) => {
+router.put('/:id', async (req, res, next) => {
   try {
     const { subject, question_type, difficulty, instructions, status } = req.body;
-    const exercise = repo.updateExercise(req.params.id, { subject, question_type, difficulty, instructions, status });
+    const exercise = await repo.updateExercise(req.params.id, { subject, question_type, difficulty, instructions, status });
     if (!exercise) throw new AppError(404, 'Exercise not found');
     res.json(exercise);
   } catch (err) {
@@ -87,9 +87,9 @@ router.put('/:id', (req, res, next) => {
 });
 
 // Delete exercise
-router.delete('/:id', (req, res, next) => {
+router.delete('/:id', async (req, res, next) => {
   try {
-    const deleted = repo.deleteExercise(req.params.id);
+    const deleted = await repo.deleteExercise(req.params.id);
     if (!deleted) throw new AppError(404, 'Exercise not found');
     res.json({ success: true });
   } catch (err) {

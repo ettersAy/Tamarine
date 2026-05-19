@@ -1,48 +1,63 @@
-import { getDb } from '../db';
+import prisma from '../db/prisma';
 import { correctAnswer } from './ai';
 
 export async function correctSubmission(submissionId: string) {
-  const db = getDb();
-  const submission = db.prepare('SELECT * FROM submissions WHERE id = ?').get(submissionId) as any;
+  const submission = await prisma.submission.findUnique({ where: { id: submissionId } });
   if (!submission) throw new Error('Submission not found');
   if (submission.status === 'corrected') throw new Error('Already corrected');
 
-  db.prepare("UPDATE submissions SET status = 'correcting' WHERE id = ?").run(submissionId);
+  await prisma.submission.update({
+    where: { id: submissionId },
+    data: { status: 'correcting' },
+  });
 
-  const answers = db.prepare(`
-    SELECT a.*, q.question_text, q.type, q.correct_answer
-    FROM answers a
-    JOIN questions q ON q.id = a.question_id
-    WHERE a.submission_id = ?
-  `).all(submissionId) as any[];
+  const answers = await prisma.answer.findMany({
+    where: { submissionId },
+    include: {
+      question: {
+        select: { questionText: true, type: true, correctAnswer: true },
+      },
+    },
+  });
 
   let totalScore = 0;
 
   for (const answer of answers) {
     try {
       const result = await correctAnswer({
-        question_text: answer.question_text,
-        question_type: answer.type,
-        correct_answer: answer.correct_answer || '',
-        student_answer: answer.student_answer || '',
-        max_score: answer.max_score || 1,
+        question_text: answer.question.questionText,
+        question_type: answer.question.type,
+        correct_answer: answer.question.correctAnswer || '',
+        student_answer: answer.studentAnswer || '',
+        max_score: answer.maxScore || 1,
       });
 
       totalScore += result.score;
 
-      db.prepare(`
-        UPDATE answers SET is_correct = ?, score = ?, feedback = ? WHERE id = ?
-      `).run(result.is_correct ? 1 : 0, result.score, result.feedback, answer.id);
+      await prisma.answer.update({
+        where: { id: answer.id },
+        data: {
+          isCorrect: result.is_correct,
+          score: result.score,
+          feedback: result.feedback,
+        },
+      });
     } catch {
-      db.prepare(`
-        UPDATE answers SET is_correct = 0, score = 0, feedback = ? WHERE id = ?
-      `).run('Could not evaluate this answer.', answer.id);
+      await prisma.answer.update({
+        where: { id: answer.id },
+        data: {
+          isCorrect: false,
+          score: 0,
+          feedback: 'Could not evaluate this answer.',
+        },
+      });
     }
   }
 
-  db.prepare(`
-    UPDATE submissions SET status = 'corrected', total_score = ?, corrected_at = datetime('now') WHERE id = ?
-  `).run(totalScore, submissionId);
+  await prisma.submission.update({
+    where: { id: submissionId },
+    data: { status: 'corrected', totalScore, correctedAt: new Date() },
+  });
 
-  return db.prepare('SELECT * FROM submissions WHERE id = ?').get(submissionId);
+  return prisma.submission.findUnique({ where: { id: submissionId } });
 }

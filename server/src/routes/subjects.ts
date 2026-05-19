@@ -1,45 +1,58 @@
 import { Router } from 'express';
-import { v4 as uuid } from 'uuid';
-import { getDb } from '../db';
 import { AppError } from '../middleware/errorHandler';
+import prisma from '../db/prisma';
+import { serialize } from '../db/transform';
 
 const router = Router();
 
-router.get('/', (_req, res, next) => {
+router.get('/', async (_req, res, next) => {
   try {
-    const db = getDb();
-    const subjects = db.prepare(
-      'SELECT s.*, (SELECT COUNT(*) FROM exercises WHERE subject = s.name) as exercise_count FROM subjects s ORDER BY s.name'
-    ).all();
-    res.json(subjects);
+    const subjects = await prisma.subject.findMany({
+      orderBy: { name: 'asc' },
+    });
+
+    // Count exercises per subject by name (no FK - subject field is text reference)
+    const exerciseCounts = await prisma.exercise.groupBy({
+      by: ['subject'],
+      _count: { id: true },
+    });
+    const countMap = new Map(exerciseCounts.map((e) => [e.subject, e._count.id]));
+
+    const result = serialize(subjects).map((s: any) => ({
+      ...s,
+      exercise_count: countMap.get(s.name) || 0,
+    }));
+
+    res.json(result);
   } catch (err) {
     next(err);
   }
 });
 
-router.post('/', (req, res, next) => {
+router.post('/', async (req, res, next) => {
   try {
-    const db = getDb();
     const { name } = req.body;
     if (!name || !name.trim()) throw new AppError(400, 'Subject name is required');
 
-    const existing = db.prepare('SELECT id FROM subjects WHERE name = ?').get(name.trim());
+    const existing = await prisma.subject.findUnique({ where: { name: name.trim() } });
     if (existing) throw new AppError(409, 'Subject already exists');
 
-    const id = uuid();
-    db.prepare('INSERT INTO subjects (id, name) VALUES (?, ?)').run(id, name.trim());
-    const subject = db.prepare('SELECT * FROM subjects WHERE id = ?').get(id);
-    res.status(201).json(subject);
+    const subject = await prisma.subject.create({
+      data: { name: name.trim() },
+    });
+
+    res.status(201).json(serialize(subject));
   } catch (err) {
     next(err);
   }
 });
 
-router.delete('/:id', (req, res, next) => {
+router.delete('/:id', async (req, res, next) => {
   try {
-    const db = getDb();
-    const result = db.prepare('DELETE FROM subjects WHERE id = ?').run(req.params.id);
-    if (result.changes === 0) throw new AppError(404, 'Subject not found');
+    const subject = await prisma.subject.findUnique({ where: { id: req.params.id } });
+    if (!subject) throw new AppError(404, 'Subject not found');
+
+    await prisma.subject.delete({ where: { id: req.params.id } });
     res.json({ success: true });
   } catch (err) {
     next(err);

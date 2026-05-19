@@ -1,92 +1,120 @@
 import { Router } from 'express';
-import { v4 as uuid } from 'uuid';
-import { getDb } from '../db';
 import { AppError } from '../middleware/errorHandler';
+import prisma from '../db/prisma';
+import { serialize } from '../db/transform';
 import { correctSubmission } from '../services/correctionService';
 
 const router = Router();
 
 // Submit answers
-router.post('/', (req, res, next) => {
+router.post('/', async (req, res, next) => {
   try {
-    const db = getDb();
     const { share_code, student_name, answers } = req.body;
 
-    const link = db.prepare(
-      'SELECT * FROM share_links WHERE code = ? AND is_active = 1'
-    ).get(share_code);
+    const link = await prisma.shareLink.findFirst({
+      where: { code: share_code, isActive: true },
+    });
     if (!link) throw new AppError(404, 'Invalid or inactive share link');
 
-    const exerciseId = (link as any).exercise_id;
-    const submissionId = uuid();
+    const exerciseId = link.exerciseId;
 
-    const questions = db.prepare(
-      'SELECT * FROM questions WHERE exercise_id = ? ORDER BY order_index'
-    ).all(exerciseId) as any[];
+    const questions = await prisma.question.findMany({
+      where: { exerciseId },
+      orderBy: { orderIndex: 'asc' },
+    });
 
     const maxScore = questions.reduce((sum, q) => sum + q.points, 0);
 
-    db.prepare(`
-      INSERT INTO submissions (id, exercise_id, share_link_id, student_name, status, max_score)
-      VALUES (?, ?, ?, ?, 'submitted', ?)
-    `).run(submissionId, exerciseId, (link as any).id, student_name || null, maxScore);
+    const submission = await prisma.submission.create({
+      data: {
+        exerciseId,
+        shareLinkId: link.id,
+        studentName: student_name || null,
+        status: 'submitted',
+        maxScore,
+        ...(answers?.length
+          ? {
+              answers: {
+                create: answers.map((ans: any) => {
+                  const question = questions.find((q) => q.id === ans.question_id);
+                  return {
+                    questionId: ans.question_id,
+                    studentAnswer: ans.student_answer || null,
+                    maxScore: question?.points || 1,
+                  };
+                }),
+              },
+            }
+          : {}),
+      },
+    });
 
-    if (answers && Array.isArray(answers)) {
-      const stmt = db.prepare(`
-        INSERT INTO answers (id, submission_id, question_id, student_answer, max_score)
-        VALUES (?, ?, ?, ?, ?)
-      `);
-      for (const ans of answers) {
-        const question = questions.find(q => q.id === ans.question_id);
-        stmt.run(uuid(), submissionId, ans.question_id, ans.student_answer || null, question?.points || 1);
-      }
-    }
-
-    const submission = db.prepare('SELECT * FROM submissions WHERE id = ?').get(submissionId);
-    res.status(201).json(submission);
+    res.status(201).json(serialize(submission));
   } catch (err) {
     next(err);
   }
 });
 
 // Get submissions for an exercise
-router.get('/exercise/:exerciseId', (req, res, next) => {
+router.get('/exercise/:exerciseId', async (req, res, next) => {
   try {
-    const db = getDb();
-    const submissions = db.prepare(`
-      SELECT s.*,
-        (SELECT COUNT(*) FROM answers WHERE submission_id = s.id) as answer_count
-      FROM submissions s
-      WHERE s.exercise_id = ?
-      ORDER BY s.submitted_at DESC
-    `).all(req.params.exerciseId);
-    res.json(submissions);
+    const submissions = await prisma.submission.findMany({
+      where: { exerciseId: req.params.exerciseId },
+      orderBy: { submittedAt: 'desc' },
+      include: {
+        _count: { select: { answers: true } },
+      },
+    });
+
+    const result = serialize(submissions).map((s: any) => ({
+      ...s,
+      answer_count: s._count?.answers ?? 0,
+      _count: undefined,
+    }));
+
+    res.json(result);
   } catch (err) {
     next(err);
   }
 });
 
 // Get single submission with answers
-router.get('/:id', (req, res, next) => {
+router.get('/:id', async (req, res, next) => {
   try {
-    const db = getDb();
-    const submission = db.prepare('SELECT * FROM submissions WHERE id = ?').get(req.params.id);
+    const submission = await prisma.submission.findUnique({
+      where: { id: req.params.id },
+      include: {
+        answers: {
+          orderBy: { question: { orderIndex: 'asc' } },
+          include: {
+            question: {
+              select: {
+                questionText: true,
+                type: true,
+                options: true,
+                correctAnswer: true,
+                orderIndex: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
     if (!submission) throw new AppError(404, 'Submission not found');
 
-    const answers = db.prepare(`
-      SELECT a.*, q.question_text, q.type, q.options, q.correct_answer, q.order_index
-      FROM answers a
-      JOIN questions q ON q.id = a.question_id
-      WHERE a.submission_id = ?
-      ORDER BY q.order_index
-    `).all(req.params.id);
-
-    const parsedAnswers = (answers as any[]).map(a => ({
+    const serialized = serialize(submission);
+    const parsedAnswers = serialized.answers.map((a: any) => ({
       ...a,
-      options: a.options ? JSON.parse(a.options) : null,
+      question_text: a.question?.question_text ?? a.question_text,
+      type: a.question?.type ?? a.type,
+      options: a.question?.options ? JSON.parse(a.question.options) : null,
+      correct_answer: a.question?.correct_answer ?? a.correct_answer,
+      order_index: a.question?.order_index ?? a.order_index,
+      question: undefined,
     }));
 
-    res.json({ ...submission as any, answers: parsedAnswers });
+    res.json({ ...serialized, answers: parsedAnswers });
   } catch (err) {
     next(err);
   }
@@ -95,42 +123,40 @@ router.get('/:id', (req, res, next) => {
 // Trigger AI correction for a submission
 router.post('/:id/correct', async (req, res, next) => {
   try {
-    const db = getDb();
-    const submission = db.prepare('SELECT * FROM submissions WHERE id = ?').get(req.params.id) as any;
+    const submission = await prisma.submission.findUnique({ where: { id: req.params.id } });
     if (!submission) throw new AppError(404, 'Submission not found');
     if (submission.status === 'corrected') throw new AppError(400, 'Already corrected');
 
     const updated = await correctSubmission(req.params.id);
-    res.json(updated);
+    res.json(serialize(updated));
   } catch (err) {
     next(err);
   }
 });
 
 // Export submissions as CSV
-router.get('/exercise/:exerciseId/export', (req, res, next) => {
+router.get('/exercise/:exerciseId/export', async (req, res, next) => {
   try {
-    const db = getDb();
-    const exercise = db.prepare('SELECT * FROM exercises WHERE id = ?').get(req.params.exerciseId) as any;
+    const exercise = await prisma.exercise.findUnique({ where: { id: req.params.exerciseId } });
     if (!exercise) throw new AppError(404, 'Exercise not found');
 
-    const submissions = db.prepare(`
-      SELECT s.* FROM submissions s WHERE s.exercise_id = ? AND s.status = 'corrected'
-      ORDER BY s.submitted_at DESC
-    `).all(req.params.exerciseId) as any[];
+    const submissions = await prisma.submission.findMany({
+      where: { exerciseId: req.params.exerciseId, status: 'corrected' },
+      orderBy: { submittedAt: 'desc' },
+    });
 
     const header = ['Student Name', 'Total Score', 'Max Score', 'Percentage', 'Submitted At', 'Corrected At'];
-    const rows = submissions.map(s => [
-      s.student_name || 'Anonymous',
-      s.total_score,
-      s.max_score,
-      s.max_score ? `${Math.round((s.total_score / s.max_score) * 100)}%` : 'N/A',
-      s.submitted_at,
-      s.corrected_at || '',
+    const rows = submissions.map((s) => [
+      s.studentName || 'Anonymous',
+      s.totalScore,
+      s.maxScore,
+      s.maxScore ? `${Math.round((s.totalScore! / s.maxScore) * 100)}%` : 'N/A',
+      s.submittedAt?.toISOString() || '',
+      s.correctedAt?.toISOString() || '',
     ]);
 
     const csv = [header, ...rows]
-      .map(row => row.map(cell => `"${String(cell).replace(/"/g, '""')}"`).join(','))
+      .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(','))
       .join('\n');
 
     res.setHeader('Content-Type', 'text/csv');

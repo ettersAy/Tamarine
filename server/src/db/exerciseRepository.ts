@@ -1,5 +1,5 @@
-import { v4 as uuid } from 'uuid';
-import { getDb } from './connection';
+import prisma from './prisma';
+import { serialize } from './transform';
 
 export interface ExerciseFilters {
   search?: string;
@@ -11,84 +11,76 @@ export interface ExerciseFilters {
   limit?: number;
 }
 
-export function listExercises(filters: ExerciseFilters) {
-  const db = getDb();
-  const conditions: string[] = [];
-  const params: any[] = [];
+export async function listExercises(filters: ExerciseFilters) {
+  const conditions: any = {};
 
-  if (filters.search) {
-    conditions.push('(e.subject LIKE ? OR e.instructions LIKE ?)');
-    params.push(`%${filters.search}%`, `%${filters.search}%`);
-  }
-  if (filters.subject) {
-    conditions.push('e.subject = ?');
-    params.push(filters.subject);
-  }
-  if (filters.question_type) {
-    conditions.push('e.question_type = ?');
-    params.push(filters.question_type);
-  }
-  if (filters.difficulty) {
-    conditions.push('e.difficulty = ?');
-    params.push(filters.difficulty);
-  }
-  if (filters.status) {
-    conditions.push('e.status = ?');
-    params.push(filters.status);
-  }
+  if (filters.subject) conditions.subject = filters.subject;
+  if (filters.question_type) conditions.questionType = filters.question_type;
+  if (filters.difficulty) conditions.difficulty = filters.difficulty;
+  if (filters.status) conditions.status = filters.status;
 
-  const where = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+  const searchConditions = filters.search
+    ? [{ subject: { contains: filters.search, mode: 'insensitive' as const } },
+       { instructions: { contains: filters.search, mode: 'insensitive' as const } }]
+    : undefined;
+
+  const where = {
+    ...conditions,
+    ...(searchConditions ? { OR: searchConditions } : {}),
+  };
+
   const pageNum = Math.max(1, filters.page || 1);
   const limitNum = Math.min(100, Math.max(1, filters.limit || 20));
-  const offset = (pageNum - 1) * limitNum;
+  const skip = (pageNum - 1) * limitNum;
 
-  const countRow = db.prepare(
-    `SELECT COUNT(*) as total FROM exercises e ${where}`
-  ).get(...params) as any;
-
-  const exercises = db.prepare(`
-    SELECT e.*,
-      (SELECT COUNT(*) FROM questions WHERE exercise_id = e.id) as question_count_actual,
-      (SELECT COUNT(*) FROM submissions WHERE exercise_id = e.id) as submission_count
-    FROM exercises e
-    ${where}
-    ORDER BY e.created_at DESC
-    LIMIT ? OFFSET ?
-  `).all(...params, limitNum, offset);
+  const [total, exercises] = await Promise.all([
+    prisma.exercise.count({ where }),
+    prisma.exercise.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      skip,
+      take: limitNum,
+      include: {
+        _count: {
+          select: { questions: true, submissions: true },
+        },
+      },
+    }),
+  ]);
 
   return {
-    data: exercises,
+    data: serialize(exercises).map((e: any) => ({
+      ...e,
+      question_count_actual: e._count?.questions ?? e.question_count,
+      submission_count: e._count?.submissions ?? 0,
+      _count: undefined,
+    })),
     pagination: {
       page: pageNum,
       limit: limitNum,
-      total: countRow.total,
-      totalPages: Math.ceil(countRow.total / limitNum),
+      total,
+      totalPages: Math.ceil(total / limitNum),
     },
   };
 }
 
-export function getExerciseById(id: string) {
-  const db = getDb();
-  return db.prepare('SELECT * FROM exercises WHERE id = ?').get(id);
+export async function getExerciseById(id: string) {
+  const exercise = await prisma.exercise.findUnique({ where: { id } });
+  return exercise ? serialize(exercise) : null;
 }
 
-export function getExerciseWithDetails(id: string) {
-  const db = getDb();
-  const exercise = getExerciseById(id);
-  if (!exercise) return null;
-
-  const questions = db.prepare(
-    'SELECT * FROM questions WHERE exercise_id = ? ORDER BY order_index'
-  ).all(id);
-
-  const shareLinks = db.prepare(
-    'SELECT * FROM share_links WHERE exercise_id = ? ORDER BY created_at DESC'
-  ).all(id);
-
-  return { ...exercise as any, questions, shareLinks };
+export async function getExerciseWithDetails(id: string) {
+  const exercise = await prisma.exercise.findUnique({
+    where: { id },
+    include: {
+      questions: { orderBy: { orderIndex: 'asc' } },
+      shareLinks: { orderBy: { createdAt: 'desc' } },
+    },
+  });
+  return exercise ? serialize(exercise) : null;
 }
 
-export function createExercise(data: {
+export async function createExercise(data: {
   subject: string;
   question_count: number;
   question_type: string;
@@ -102,64 +94,63 @@ export function createExercise(data: {
     points?: number;
   }>;
 }) {
-  const db = getDb();
-  const id = uuid();
+  const exercise = await prisma.exercise.create({
+    data: {
+      subject: data.subject,
+      questionCount: data.question_count,
+      questionType: data.question_type,
+      difficulty: data.difficulty,
+      instructions: data.instructions || null,
+      status: 'generated',
+      ...(data.questions?.length
+        ? {
+            questions: {
+              create: data.questions.map((q, i) => ({
+                type: q.type || 'short_answer',
+                questionText: q.question_text,
+                options: q.options ? JSON.stringify(q.options) : null,
+                correctAnswer: q.correct_answer || null,
+                points: q.points || 1,
+                orderIndex: i + 1,
+              })),
+            },
+          }
+        : {}),
+    },
+  });
 
-  db.prepare(`
-    INSERT INTO exercises (id, subject, question_count, question_type, difficulty, instructions, status)
-    VALUES (?, ?, ?, ?, ?, ?, 'generated')
-  `).run(id, data.subject, data.question_count, data.question_type, data.difficulty, data.instructions || null);
-
-  if (data.questions && Array.isArray(data.questions)) {
-    const stmt = db.prepare(`
-      INSERT INTO questions (id, exercise_id, order_index, type, question_text, options, correct_answer, points)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    for (let i = 0; i < data.questions.length; i++) {
-      const q = data.questions[i];
-      stmt.run(
-        uuid(), id, i + 1,
-        q.type || 'short_answer',
-        q.question_text,
-        q.options ? JSON.stringify(q.options) : null,
-        q.correct_answer || null,
-        q.points || 1
-      );
-    }
-  }
-
-  return db.prepare('SELECT * FROM exercises WHERE id = ?').get(id);
+  return serialize(exercise);
 }
 
-export function updateExercise(id: string, data: {
+export async function updateExercise(id: string, data: {
   subject?: string;
   question_type?: string;
   difficulty?: string;
   instructions?: string | null;
   status?: string;
 }) {
-  const db = getDb();
-  const existing = getExerciseById(id);
+  const existing = await prisma.exercise.findUnique({ where: { id } });
   if (!existing) return null;
 
-  db.prepare(`
-    UPDATE exercises
-    SET subject = ?, question_type = ?, difficulty = ?, instructions = ?, status = ?, updated_at = datetime('now')
-    WHERE id = ?
-  `).run(
-    data.subject ?? (existing as any).subject,
-    data.question_type ?? (existing as any).question_type,
-    data.difficulty ?? (existing as any).difficulty,
-    data.instructions ?? (existing as any).instructions,
-    data.status ?? (existing as any).status,
-    id
-  );
+  const exercise = await prisma.exercise.update({
+    where: { id },
+    data: {
+      ...(data.subject !== undefined ? { subject: data.subject } : {}),
+      ...(data.question_type !== undefined ? { questionType: data.question_type } : {}),
+      ...(data.difficulty !== undefined ? { difficulty: data.difficulty } : {}),
+      ...(data.instructions !== undefined ? { instructions: data.instructions } : {}),
+      ...(data.status !== undefined ? { status: data.status } : {}),
+    },
+  });
 
-  return db.prepare('SELECT * FROM exercises WHERE id = ?').get(id);
+  return serialize(exercise);
 }
 
-export function deleteExercise(id: string): boolean {
-  const db = getDb();
-  const result = db.prepare('DELETE FROM exercises WHERE id = ?').run(id);
-  return result.changes > 0;
+export async function deleteExercise(id: string): Promise<boolean> {
+  try {
+    await prisma.exercise.delete({ where: { id } });
+    return true;
+  } catch {
+    return false;
+  }
 }

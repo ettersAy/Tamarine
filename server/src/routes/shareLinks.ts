@@ -1,90 +1,105 @@
 import { Router } from 'express';
-import { v4 as uuid } from 'uuid';
 import crypto from 'crypto';
-import { getDb } from '../db';
 import { AppError } from '../middleware/errorHandler';
+import prisma from '../db/prisma';
+import { serialize } from '../db/transform';
 
 const router = Router();
 
 // Generate a share link for an exercise
-router.post('/', (req, res, next) => {
+router.post('/', async (req, res, next) => {
   try {
-    const db = getDb();
     const { exercise_id } = req.body;
 
-    const exercise = db.prepare('SELECT * FROM exercises WHERE id = ?').get(exercise_id);
+    const exercise = await prisma.exercise.findUnique({ where: { id: exercise_id } });
     if (!exercise) throw new AppError(404, 'Exercise not found');
 
     const code = crypto.randomBytes(4).toString('hex');
-    const id = uuid();
 
-    db.prepare(`
-      INSERT INTO share_links (id, exercise_id, code) VALUES (?, ?, ?)
-    `).run(id, exercise_id, code);
+    const link = await prisma.shareLink.create({
+      data: { exerciseId: exercise_id, code },
+    });
 
-    const link = db.prepare('SELECT * FROM share_links WHERE id = ?').get(id);
-    res.status(201).json(link);
+    res.status(201).json(serialize(link));
   } catch (err) {
     next(err);
   }
 });
 
 // Get share link info (for student access)
-router.get('/:code', (req, res, next) => {
+router.get('/:code', async (req, res, next) => {
   try {
-    const db = getDb();
-    const link = db.prepare(`
-      SELECT sl.*, e.subject, e.question_count, e.question_type, e.difficulty, e.instructions
-      FROM share_links sl
-      JOIN exercises e ON e.id = sl.exercise_id
-      WHERE sl.code = ? AND sl.is_active = 1
-    `).get(req.params.code);
+    const link = await prisma.shareLink.findFirst({
+      where: { code: req.params.code, isActive: true },
+      include: {
+        exercise: {
+          select: { subject: true, questionCount: true, questionType: true, difficulty: true, instructions: true },
+        },
+      },
+    });
 
     if (!link) throw new AppError(404, 'Share link not found or inactive');
 
-    const questions = db.prepare(`
-      SELECT id, order_index, type, question_text, options, points
-      FROM questions
-      WHERE exercise_id = ?
-      ORDER BY order_index
-    `).all((link as any).exercise_id);
+    const questions = await prisma.question.findMany({
+      where: { exerciseId: link.exerciseId },
+      orderBy: { orderIndex: 'asc' },
+      select: {
+        id: true,
+        orderIndex: true,
+        type: true,
+        questionText: true,
+        options: true,
+        points: true,
+      },
+    });
 
-    // Parse options JSON for MCQ questions
-    const parsedQuestions = (questions as any[]).map(q => ({
+    const serializedLink = serialize(link);
+    const parsedQuestions = (serialize(questions) as any[]).map((q: any) => ({
       ...q,
       options: q.options ? JSON.parse(q.options) : null,
     }));
 
-    res.json({ ...link as any, questions: parsedQuestions });
+    res.json({
+      ...serializedLink,
+      subject: (link as any).exercise?.subject,
+      question_count: (link as any).exercise?.questionCount,
+      question_type: (link as any).exercise?.questionType,
+      difficulty: (link as any).exercise?.difficulty,
+      instructions: (link as any).exercise?.instructions,
+      exercise: undefined,
+      questions: parsedQuestions,
+    });
   } catch (err) {
     next(err);
   }
 });
 
 // Toggle share link active status
-router.put('/:code/toggle', (req, res, next) => {
+router.put('/:code/toggle', async (req, res, next) => {
   try {
-    const db = getDb();
-    const link = db.prepare('SELECT * FROM share_links WHERE code = ?').get(req.params.code);
+    const link = await prisma.shareLink.findFirst({ where: { code: req.params.code } });
     if (!link) throw new AppError(404, 'Share link not found');
 
-    const newStatus = (link as any).is_active ? 0 : 1;
-    db.prepare('UPDATE share_links SET is_active = ? WHERE code = ?').run(newStatus, req.params.code);
+    const newStatus = !link.isActive;
+    await prisma.shareLink.update({
+      where: { id: link.id },
+      data: { isActive: newStatus },
+    });
 
-    res.json({ code: req.params.code, is_active: newStatus });
+    res.json({ code: req.params.code, is_active: newStatus ? 1 : 0 });
   } catch (err) {
     next(err);
   }
 });
 
 // List share links for an exercise
-router.get('/exercise/:exerciseId', (req, res, next) => {
+router.get('/exercise/:exerciseId', async (req, res, next) => {
   try {
-    const db = getDb();
-    const links = db.prepare(
-      'SELECT * FROM share_links WHERE exercise_id = ? ORDER BY created_at DESC'
-    ).all(req.params.exerciseId);
-    res.json(links);
+    const links = await prisma.shareLink.findMany({
+      where: { exerciseId: req.params.exerciseId },
+      orderBy: { createdAt: 'desc' },
+    });
+    res.json(serialize(links));
   } catch (err) {
     next(err);
   }

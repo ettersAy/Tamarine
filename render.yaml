@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: tamarine
+    env: node
+    buildCommand: npm ci && cd server && npm ci && cd ../client && npm ci && cd .. && cd server && npx prisma generate && npx prisma db push && cd .. && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: 3001
+      - key: DATABASE_URL
+        sync: false
+      - key: DIRECT_URL
+        sync: false
+      - key: DEEPSEEK_API_KEY
+        sync: false
