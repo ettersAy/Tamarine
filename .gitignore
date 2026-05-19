@@ -1,0 +1,12 @@
+node_modules/
+dist/
+dist-server/
+.env
+*.db
+*.db-*
+.DS_Store
+coverage/
+.githash
+.vite/
+playwright-report/
+test-results/

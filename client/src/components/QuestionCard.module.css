@@ -1,0 +1,137 @@
+.card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  background: #f9fafb;
+  border-bottom: 1px solid #e5e7eb;
+}
+
+.num {
+  font-weight: 700;
+  color: #4f46e5;
+  font-size: 14px;
+}
+
+.typeBadge {
+  padding: 2px 8px;
+  background: #e0e7ff;
+  color: #4338ca;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  text-transform: uppercase;
+}
+
+.points {
+  padding: 2px 8px;
+  background: #dbeafe;
+  color: #1d4ed8;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.actions {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+
+.editBtn,
+.removeBtn {
+  padding: 4px 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  background: #fff;
+  transition: background 0.15s;
+}
+
+.editBtn:hover { background: #f3f4f6; }
+
+.removeBtn {
+  color: #dc2626;
+  border-color: #fca5a5;
+}
+
+.removeBtn:hover {
+  background: #fef2f2;
+}
+
+.body {
+  padding: 16px;
+}
+
+.questionText {
+  font-size: 15px;
+  line-height: 1.6;
+  color: #111827;
+  margin-bottom: 8px;
+}
+
+.answer {
+  font-size: 14px;
+  color: #059669;
+  font-weight: 500;
+}
+
+.options {
+  list-style: none;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.options li {
+  padding: 8px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  font-size: 14px;
+}
+
+.correctOption {
+  background: #ecfdf5;
+  border-color: #6ee7b7 !important;
+  color: #065f46;
+  font-weight: 500;
+}
+
+.editForm {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.editForm label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+}
+
+.editForm input,
+.editForm select,
+.editForm textarea {
+  padding: 8px 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  font-size: 14px;
+  font-family: inherit;
+}
+
+.editForm input:focus,
+.editForm select:focus,
+.editForm textarea:focus {
+  outline: none;
+  border-color: #4f46e5;
+}
