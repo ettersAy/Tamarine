@@ -8,6 +8,7 @@
     "dev:server": "cd server && npm run dev",
     "dev:client": "cd client && npm run dev",
     "build": "npm run db:generate && npm run build:client && npm run build:server",
+    "build:render": "cd server && npx prisma generate && cd ../client && npx vite build && cd ../server && npm run build",
     "build:server": "cd server && npm run build",
     "build:client": "cd client && npm run build",
     "db:generate": "cd server && npx prisma generate",
