@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  typescript:
+    name: TypeScript Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+      - run: npm ci
+      - run: cd server && npx prisma generate
+      - name: Check server
+        run: cd server && npx tsc --noEmit
+      - name: Check client
+        run: cd client && npx tsc --noEmit
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+      - run: npm ci
+      - run: cd server && npx prisma generate
+      - name: Run server tests
+        run: cd server && npx vitest run
+      - name: Run client tests
+        run: cd client && npx vitest run
+
+  playwright-smoke:
+    name: Playwright Smoke Tests
+    runs-on: ubuntu-latest
+    needs: [typescript, unit-tests]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+      - run: npm ci
+      - run: cd server && npx prisma generate
+      - run: cd server && npx prisma db push --force-reset
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+      - name: Run smoke tests
+        run: npm run test:e2e:smoke
+        env:
+          BASE_URL: http://localhost:5173
+          DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY || 'sk-test-placeholder' }}
+
+  validator:
+    name: Completion Validator
+    runs-on: ubuntu-latest
+    needs: [unit-tests]
+    if: github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'npm'
+      - run: npm ci
+      - run: cd server && npx prisma generate
+      - name: Run validator (JSON)
+        run: bash scripts/validate-mission.sh --json 2>&1
+        continue-on-error: true

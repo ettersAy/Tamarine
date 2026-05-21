@@ -15,9 +15,12 @@
     "db:push": "cd server && npx prisma db push",
     "start": "cd server && npm start",
     "test": "cd server && npm test",
-    "test:client": "cd client && npm test"
+    "test:client": "cd client && npm test",
+    "test:e2e": "npx playwright test",
+    "test:e2e:smoke": "npx playwright test --grep 'smoke|Critical Flow'"
   },
   "devDependencies": {
+    "@playwright/test": "^1.60.0",
     "concurrently": "^9.1.0"
   }
 }
