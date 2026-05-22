@@ -59,7 +59,7 @@ test.describe('Teacher Critical Flow', () => {
     // The exercise list should render (may show loading then list)
     await page.waitForLoadState('networkidle');
     // Should not show error state
-    await expect(page.locator('text=E2E Smoke Test Subject')).toBeVisible({ timeout: 10000 });
+    await expect(page.locator('text=E2E Smoke Test Subject').first()).toBeVisible({ timeout: 10000 });
   });
 
   test('can generate share link for exercise', async ({ request }) => {
