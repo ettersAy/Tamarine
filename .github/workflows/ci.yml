@@ -17,6 +17,8 @@ jobs:
           node-version: 22
           cache: 'npm'
       - run: npm ci
+      - run: cd server && npm ci
+      - run: cd client && npm ci
       - run: cd server && npx prisma generate
       - name: Check server
         run: cd server && npx tsc --noEmit
@@ -33,6 +35,8 @@ jobs:
           node-version: 22
           cache: 'npm'
       - run: npm ci
+      - run: cd server && npm ci
+      - run: cd client && npm ci
       - run: cd server && npx prisma generate
       - name: Run server tests
         run: cd server && npx vitest run
@@ -50,6 +54,8 @@ jobs:
           node-version: 22
           cache: 'npm'
       - run: npm ci
+      - run: cd server && npm ci
+      - run: cd client && npm ci
       - run: cd server && npx prisma generate
       - run: cd server && npx prisma db push --force-reset
       - name: Install Playwright browsers
@@ -72,6 +78,8 @@ jobs:
           node-version: 22
           cache: 'npm'
       - run: npm ci
+      - run: cd server && npm ci
+      - run: cd client && npm ci
       - run: cd server && npx prisma generate
       - name: Run validator (JSON)
         run: bash scripts/validate-mission.sh --json 2>&1
