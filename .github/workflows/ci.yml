@@ -57,14 +57,35 @@ jobs:
       - run: npm ci
       - run: cd server && npm ci
       - run: cd client && npm ci
+      - name: Check if database secrets are configured
+        id: check-db
+        env:
+          DB_URL: ${{ secrets.DATABASE_URL }}
+        run: |
+          if [ -n "$DB_URL" ]; then
+            echo "has-db=true" >> $GITHUB_OUTPUT
+            echo "Database secrets found, will run smoke tests"
+          else
+            echo "has-db=false" >> $GITHUB_OUTPUT
+            echo "No database secrets configured, skipping smoke tests"
+          fi
       - run: cd server && npx prisma generate
-      - run: cd server && npx prisma db push --force-reset
+      - name: Push schema to test database
+        if: steps.check-db.outputs.has-db == 'true'
+        run: cd server && npx prisma db push --force-reset
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
       - name: Install Playwright browsers
+        if: steps.check-db.outputs.has-db == 'true'
         run: npx playwright install --with-deps chromium
       - name: Run smoke tests
+        if: steps.check-db.outputs.has-db == 'true'
         run: npm run test:e2e:smoke
         env:
           BASE_URL: http://localhost:5173
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
           DEEPSEEK_API_KEY: ${{ secrets.DEEPSEEK_API_KEY || 'sk-test-placeholder' }}
 
   validator:
