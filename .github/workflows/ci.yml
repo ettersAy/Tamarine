@@ -79,6 +79,33 @@ jobs:
       - name: Install Playwright browsers
         if: steps.check-db.outputs.has-db == 'true'
         run: npx playwright install --with-deps chromium
+      - name: Start backend server
+        if: steps.check-db.outputs.has-db == 'true'
+        run: |
+          cd server && nohup npx tsx src/index.ts > /tmp/server.log 2>&1 &
+          echo "SERVER_PID=$!" >> $GITHUB_ENV
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          DIRECT_URL: ${{ secrets.DIRECT_URL }}
+      - name: Wait for backend
+        if: steps.check-db.outputs.has-db == 'true'
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:3001/api/exercises && echo "Backend ready" && break
+            sleep 1
+          done
+      - name: Start frontend dev server
+        if: steps.check-db.outputs.has-db == 'true'
+        run: |
+          cd client && nohup npx vite --host --port 5173 > /tmp/client.log 2>&1 &
+          echo "CLIENT_PID=$!" >> $GITHUB_ENV
+      - name: Wait for frontend
+        if: steps.check-db.outputs.has-db == 'true'
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:5173/ && echo "Frontend ready" && break
+            sleep 1
+          done
       - name: Run smoke tests
         if: steps.check-db.outputs.has-db == 'true'
         run: npm run test:e2e:smoke
